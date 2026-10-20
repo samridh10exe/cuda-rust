@@ -115,24 +115,29 @@ pub(crate) fn expand_cuda_module_inner(
         }
     });
 
-    // Load each function into a local before building `LoadedModule`. A `?`
-    // inside the struct literal drops every field built before it, which makes
-    // the generated code quadratic in the number of kernels.
-    let function_loads = non_generic_kernels.clone().map(|kernel| {
+    // Load the functions into locals before building `LoadedModule`. With a `?`
+    // inside the struct literal, rustc emits a separate cleanup path per `?` that
+    // drops every field built so far, which is quadratic in the number of kernels
+    // (#1501). Locals share one cleanup path.
+    let function_loads = non_generic_kernels
+        .clone()
+        .enumerate()
+        .map(|(index, kernel)| {
+            let cfg_attrs = &kernel.cfg_attrs;
+            let local = internal_ident(&format!("__cuda_oxide_function_{index}"));
+            let marker = cuda_kernel_marker_name(&kernel.fn_name);
+            quote! {
+                #(#cfg_attrs)*
+                let #local = module.load_function(<#marker as ::cuda_host::CudaKernel>::PTX_NAME)?;
+            }
+        });
+    let function_initializers = non_generic_kernels.enumerate().map(|(index, kernel)| {
         let cfg_attrs = &kernel.cfg_attrs;
         let field = cuda_module_function_field(&kernel.fn_name);
-        let marker = cuda_kernel_marker_name(&kernel.fn_name);
+        let local = internal_ident(&format!("__cuda_oxide_function_{index}"));
         quote! {
             #(#cfg_attrs)*
-            let #field = module.load_function(<#marker as ::cuda_host::CudaKernel>::PTX_NAME)?;
-        }
-    });
-    let function_initializers = non_generic_kernels.map(|kernel| {
-        let cfg_attrs = &kernel.cfg_attrs;
-        let field = cuda_module_function_field(&kernel.fn_name);
-        quote! {
-            #(#cfg_attrs)*
-            #field,
+            #field: #local,
         }
     });
 
@@ -714,21 +719,26 @@ fn generate_nested_cuda_module_support(
             #field: ::cuda_core::CudaFunction,
         }
     });
-    let function_loads = non_generic_kernels.clone().map(|kernel| {
+    // Loads before the literal, exactly as in `expand_cuda_module_inner`; see the note there.
+    let function_loads = non_generic_kernels
+        .clone()
+        .enumerate()
+        .map(|(index, kernel)| {
+            let cfg_attrs = &kernel.cfg_attrs;
+            let local = internal_ident(&format!("__cuda_oxide_function_{index}"));
+            let marker = cuda_kernel_marker_name(&kernel.fn_name);
+            quote! {
+                #(#cfg_attrs)*
+                let #local = module.load_function(<#marker as ::cuda_host::CudaKernel>::PTX_NAME)?;
+            }
+        });
+    let function_initializers = non_generic_kernels.enumerate().map(|(index, kernel)| {
         let cfg_attrs = &kernel.cfg_attrs;
         let field = cuda_module_function_field(&kernel.fn_name);
-        let marker = cuda_kernel_marker_name(&kernel.fn_name);
+        let local = internal_ident(&format!("__cuda_oxide_function_{index}"));
         quote! {
             #(#cfg_attrs)*
-            let #field = module.load_function(<#marker as ::cuda_host::CudaKernel>::PTX_NAME)?;
-        }
-    });
-    let function_initializers = non_generic_kernels.map(|kernel| {
-        let cfg_attrs = &kernel.cfg_attrs;
-        let field = cuda_module_function_field(&kernel.fn_name);
-        quote! {
-            #(#cfg_attrs)*
-            #field,
+            #field: #local,
         }
     });
     let launch_methods = kernels.iter().map(generate_cuda_module_launch_method);

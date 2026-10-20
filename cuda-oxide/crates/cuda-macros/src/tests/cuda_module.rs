@@ -560,6 +560,40 @@ fn nested_inline_module_kernels_generate_namespace_local_launchers() {
 }
 
 #[test]
+fn loaded_module_functions_are_loaded_before_the_struct_literal() {
+    let module: ItemMod = parse_quote! {
+        mod kernels {
+            #[kernel]
+            pub fn top(mut out: DisjointSlice<u32>) {}
+
+            pub mod stage {
+                #[kernel]
+                pub fn scale(mut out: DisjointSlice<f32>) {}
+            }
+        }
+    };
+    let expanded = expand_to_compact_string(module);
+    // A `?` inside the `LoadedModule` literal makes the generated cleanup code
+    // quadratic in the number of kernels (#1501).
+    assert!(
+        !expanded.contains("_function:module.load_function("),
+        "expected no loads inside the struct literal:\n{expanded}"
+    );
+    assert_eq!(
+        expanded
+            .matches("let__cuda_oxide_function_0=module.load_function(")
+            .count(),
+        2,
+        "expected from_module and from_parent to load into locals:\n{expanded}"
+    );
+    assert!(
+        expanded.contains("__top_function:__cuda_oxide_function_0,")
+            && expanded.contains("__scale_function:__cuda_oxide_function_0,"),
+        "expected the struct literals to take the loaded locals:\n{expanded}"
+    );
+}
+
+#[test]
 fn nested_launch_contract_stays_in_its_namespace_and_taints_root_loading() {
     let module: ItemMod = parse_quote! {
         mod kernels {
