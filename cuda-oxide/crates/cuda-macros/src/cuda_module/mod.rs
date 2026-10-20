@@ -115,13 +115,24 @@ pub(crate) fn expand_cuda_module_inner(
         }
     });
 
-    let function_initializers = non_generic_kernels.map(|kernel| {
+    // Load each function into a local before building `LoadedModule`. A `?`
+    // inside the struct literal drops every field built before it, which makes
+    // the generated code quadratic in the number of kernels.
+    let function_loads = non_generic_kernels.clone().map(|kernel| {
         let cfg_attrs = &kernel.cfg_attrs;
         let field = cuda_module_function_field(&kernel.fn_name);
         let marker = cuda_kernel_marker_name(&kernel.fn_name);
         quote! {
             #(#cfg_attrs)*
-            #field: module.load_function(<#marker as ::cuda_host::CudaKernel>::PTX_NAME)?,
+            let #field = module.load_function(<#marker as ::cuda_host::CudaKernel>::PTX_NAME)?;
+        }
+    });
+    let function_initializers = non_generic_kernels.map(|kernel| {
+        let cfg_attrs = &kernel.cfg_attrs;
+        let field = cuda_module_function_field(&kernel.fn_name);
+        quote! {
+            #(#cfg_attrs)*
+            #field,
         }
     });
 
@@ -346,6 +357,7 @@ pub(crate) fn expand_cuda_module_inner(
             pub unsafe fn from_module(
                 module: ::std::sync::Arc<::cuda_core::CudaModule>,
             ) -> ::core::result::Result<LoadedModule, ::cuda_core::DriverError> {
+                #(#function_loads)*
                 Ok(LoadedModule {
                     __module: module.clone(),
                     __generic_functions: ::std::sync::Arc::new(
@@ -361,6 +373,7 @@ pub(crate) fn expand_cuda_module_inner(
             pub fn from_module(
                 module: ::std::sync::Arc<::cuda_core::CudaModule>,
             ) -> ::core::result::Result<LoadedModule, ::cuda_core::DriverError> {
+                #(#function_loads)*
                 Ok(LoadedModule {
                     __module: module.clone(),
                     __generic_functions: ::std::sync::Arc::new(
@@ -701,13 +714,21 @@ fn generate_nested_cuda_module_support(
             #field: ::cuda_core::CudaFunction,
         }
     });
-    let function_initializers = non_generic_kernels.map(|kernel| {
+    let function_loads = non_generic_kernels.clone().map(|kernel| {
         let cfg_attrs = &kernel.cfg_attrs;
         let field = cuda_module_function_field(&kernel.fn_name);
         let marker = cuda_kernel_marker_name(&kernel.fn_name);
         quote! {
             #(#cfg_attrs)*
-            #field: module.load_function(<#marker as ::cuda_host::CudaKernel>::PTX_NAME)?,
+            let #field = module.load_function(<#marker as ::cuda_host::CudaKernel>::PTX_NAME)?;
+        }
+    });
+    let function_initializers = non_generic_kernels.map(|kernel| {
+        let cfg_attrs = &kernel.cfg_attrs;
+        let field = cuda_module_function_field(&kernel.fn_name);
+        quote! {
+            #(#cfg_attrs)*
+            #field,
         }
     });
     let launch_methods = kernels.iter().map(generate_cuda_module_launch_method);
@@ -752,6 +773,7 @@ fn generate_nested_cuda_module_support(
                 parent: &super::LoadedModule,
             ) -> ::core::result::Result<Self, ::cuda_core::DriverError> {
                 let module = parent.as_cuda_module().clone();
+                #(#function_loads)*
                 Ok(Self {
                     __module: module.clone(),
                     __generic_functions: parent.__generic_functions.clone(),
